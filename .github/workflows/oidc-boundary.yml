@@ -1,0 +1,71 @@
+name: OIDC Boundary
+
+on:
+  pull_request:
+  pull_request_target:
+  push:
+    branches:
+      - 'copilot/**'
+      - 'main'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  inspect-oidc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print event context
+        run: |
+          echo "event_name=$GITHUB_EVENT_NAME"
+          echo "actor=$GITHUB_ACTOR"
+          echo "triggering_actor=$GITHUB_TRIGGERING_ACTOR"
+          echo "ref=$GITHUB_REF"
+          echo "head_ref=$GITHUB_HEAD_REF"
+          echo "base_ref=$GITHUB_BASE_REF"
+          echo "repository=$GITHUB_REPOSITORY"
+          echo "workflow_ref=$GITHUB_WORKFLOW_REF"
+
+      - name: Request OIDC token and print safe claims
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "OIDC request env vars unavailable"
+            exit 0
+          fi
+
+          TOKEN_JSON=$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hatakusec-oidc-boundary-test")
+
+          TOKEN=$(echo "$TOKEN_JSON" | jq -r '.value // empty')
+
+          if [ -z "$TOKEN" ]; then
+            echo "No token returned"
+            echo "$TOKEN_JSON" | jq .
+            exit 0
+          fi
+
+          PAYLOAD=$(echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | awk '{ while (length($0) % 4) $0=$0"="; print }' | base64 -d 2>/dev/null || true)
+
+          echo "$PAYLOAD" | jq '{
+            iss,
+            aud,
+            sub,
+            repository,
+            repository_owner,
+            repository_visibility,
+            ref,
+            ref_type,
+            event_name,
+            actor,
+            workflow,
+            workflow_ref,
+            job_workflow_ref,
+            sha,
+            run_id,
+            run_attempt,
+            environment
+          }'
